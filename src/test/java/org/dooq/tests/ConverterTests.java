@@ -3,6 +3,7 @@ package org.dooq.tests;
 import org.dooq.converter.DynamoConverter;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 
 import java.util.List;
 import java.util.Map;
@@ -22,14 +23,13 @@ public class ConverterTests {
                 .setMap(Map.of("key", new java.math.BigDecimal("1.2")));
 
 
-
-        var map = DynamoConverter.getConverter(Pojo.class).write(pojo);
+        Map<String, AttributeValue> map = DynamoConverter.getConverter(Pojo.class).write(pojo);
 
         System.out.println(map);
 
         Assertions.assertEquals(Pojo.class.getDeclaredFields().length, map.size());
 
-        var result = DynamoConverter.getConverter(Pojo.class).read(map);
+        Pojo result = DynamoConverter.getConverter(Pojo.class).read(map);
 
         Assertions.assertEquals(pojo, result);
 

@@ -30,7 +30,7 @@ import static org.objectweb.asm.Opcodes.*;
 @ApiStatus.Experimental
 class ParserCompiler extends ClassLoader {
 
-    public static boolean DEBUG = true;
+    public static boolean DEBUG = false;
     private static final ParserCompiler INSTANCE = new ParserCompiler();
     private final Map<Class<?>, ObjectParser<?>> CACHE = new ConcurrentHashMap<>();
 
@@ -200,10 +200,7 @@ class ParserCompiler extends ClassLoader {
 
         String methodName;
 
-        for (Field field : type.getDeclaredFields()) {
-
-            if (field.isAnnotationPresent(Transient.class)) continue;
-            if (Modifier.isTransient(field.getModifiers())) continue;
+        for (Field field : getFields(type)) {
 
             Method getMethod;
 
@@ -586,7 +583,6 @@ class ParserCompiler extends ClassLoader {
 
         var stacks = generateMethods(visitor, type);
 
-
         StringBuilder stringBuilder = new StringBuilder();
         stringBuilder.append('(');
 
@@ -612,6 +608,14 @@ class ParserCompiler extends ClassLoader {
         constructorMv.visitEnd();
     }
 
+    private static List<Field> getFields(@NotNull Class<?> type) {
+        return Arrays.stream(type.getDeclaredFields())
+                .filter(field -> !field.isAnnotationPresent(Transient.class) ||
+                        !Modifier.isTransient(field.getModifiers()) ||
+                        !field.isAnnotationPresent(DynamoIgnore.class))
+                .toList();
+    }
+
     private static int generateMethods(MethodVisitor visitor, @NotNull Class<?> type) {
 
         var methodMap = Arrays.stream(type.getDeclaredMethods())
@@ -634,10 +638,7 @@ class ParserCompiler extends ClassLoader {
 
         } else {
 
-            for (Field field : type.getDeclaredFields()) {
-
-                if (field.isAnnotationPresent(Transient.class)) continue;
-                if (Modifier.isTransient(field.getModifiers())) continue;
+            for (Field field : getFields(type)) {
 
                 var setMethod = methodMap.get("set" + field.getName().toLowerCase());
 
@@ -645,7 +646,7 @@ class ParserCompiler extends ClassLoader {
                     continue;
                 }
 
-                //Debería manejar el autoboxing...
+                //Should manage autoboxing...
                 if (setMethod.getParameterTypes()[0] != field.getType()) {
                     throw new IllegalStateException("Incorrect mutator parameter type: '%s' expected '%s' from field".formatted(setMethod.getParameterTypes()[0], field.getType()));
                 }
