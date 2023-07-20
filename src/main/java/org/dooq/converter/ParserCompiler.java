@@ -671,6 +671,7 @@ class ParserCompiler extends ClassLoader {
         return Arrays.stream(type.getDeclaredFields())
                 .filter(field -> !field.isAnnotationPresent(Transient.class) ||
                         !Modifier.isTransient(field.getModifiers()) ||
+                        !Modifier.isFinal(field.getModifiers()) ||
                         !field.isAnnotationPresent(DynamoIgnore.class))
                 .toList();
     }
