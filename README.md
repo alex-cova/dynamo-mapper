@@ -1,6 +1,6 @@
 # dynamo-mapper
 
-Easy to maintain POJO mapper for DynamoDB. Generates parser classes for POJOs at compile time, using ASM.
+Generates converter classes for POJOs at compile time, using ASM.
 
 ## Features
 
@@ -30,14 +30,14 @@ Usage:
 
 ```java
 public Map<String, AttributeValue> writeToMap(Pojo pojo){
-        DynamoConverter.getConverter(Pojo.class).write(pojo);
-        }
+    return DynamoConverter.getConverter(Pojo.class).write(pojo);
+}
 ```
 
 ```java
 public Pojo readFromMap(Map<String, AttributeValue> map){
-        return DynamoConverter.getConverter(Pojo.class).read(map);
-        }
+    return DynamoConverter.getConverter(Pojo.class).read(map);
+}
 ```
 
 Target class:
