@@ -7,6 +7,9 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+/**
+ * This class is used to filter null values from map
+ */
 public final class FilteredMap extends HashMap<String, AttributeValue> {
 
     public FilteredMap() {

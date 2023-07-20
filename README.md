@@ -11,6 +11,14 @@ Easy to maintain POJO mapper for DynamoDB. Generates parser classes for POJOs at
 * Easy to add additional converters
 * Support for java records
 
+## Benchmark
+
+```
+Benchmark                          Mode  Cnt     Score   Error  Units
+ConverterBenchmark.readBenchmark   avgt    5   635.997 ± 1.419  ns/op
+ConverterBenchmark.writeBenchmark  avgt    5  1071.437 ± 4.250  ns/op
+```
+
 ### Requirements
 
 * Target class must have a default constructor

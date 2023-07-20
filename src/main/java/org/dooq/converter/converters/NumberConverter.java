@@ -11,6 +11,10 @@ public class NumberConverter extends StringConverter {
         return AttributeValue.fromN(String.valueOf(value));
     }
 
+    protected AttributeValue writeShort(short value) {
+        return AttributeValue.fromN(String.valueOf(value));
+    }
+
     protected AttributeValue writeFloat(float value) {
         return AttributeValue.fromN(String.valueOf(value));
     }
@@ -20,6 +24,12 @@ public class NumberConverter extends StringConverter {
     }
 
     protected AttributeValue writeInteger(@Nullable Integer value) {
+        if (value == null) return null;
+
+        return AttributeValue.fromN(String.valueOf(value));
+    }
+
+    protected AttributeValue writeShorter(@Nullable Short value) {
         if (value == null) return null;
 
         return AttributeValue.fromN(String.valueOf(value));
@@ -48,12 +58,25 @@ public class NumberConverter extends StringConverter {
         return Integer.parseInt(value.n());
     }
 
+    protected int parseShort(@Nullable AttributeValue value) {
+        if (value == null) return 0;
+        return Short.parseShort(value.n());
+    }
+
     protected Integer parseInteger(@Nullable AttributeValue value) {
         if (value == null || Boolean.TRUE.equals(value.nul())) return null;
 
         if (value.n() == null) return null;
 
         return Integer.valueOf(value.n());
+    }
+
+    protected Short parseShorter(@Nullable AttributeValue value) {
+        if (value == null || Boolean.TRUE.equals(value.nul())) return null;
+
+        if (value.n() == null) return null;
+
+        return Short.valueOf(value.n());
     }
 
     protected Long parseLonger(@Nullable AttributeValue value) {
