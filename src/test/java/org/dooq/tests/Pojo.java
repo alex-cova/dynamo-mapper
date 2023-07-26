@@ -85,14 +85,32 @@ public class Pojo {
 
         if (age != pojo.age) return false;
         if (sex != pojo.sex) return false;
-        if (!name.equals(pojo.name)) return false;
-        if (!hobbies.equals(pojo.hobbies)) return false;
+
+        if (!name.equals(pojo.name)) {
+            System.out.println("name not equal %s vs %s".formatted(name, pojo.name));
+            return false;
+        }
+
+        if (!hobbies.equals(pojo.hobbies)) {
+            System.out.println("hobbies not equal %s vs %s".formatted(hobbies, pojo.hobbies));
+            return false;
+        }
+
         if (!scores.equals(pojo.scores)) {
             System.out.println("scores not equal %s vs %s".formatted(scores, pojo.scores));
             return false;
         }
-        if (!flags.equals(pojo.flags)) return false;
-        return map.equals(pojo.map);
+        if (!flags.equals(pojo.flags)) {
+            System.out.println("flags not equal %s vs %s".formatted(flags, pojo.flags));
+            return false;
+        }
+
+        if (!map.equals(pojo.map)) {
+            System.out.println("map not equal %s vs %s".formatted(map, pojo.map));
+            return false;
+        }
+
+        return true;
     }
 
     @Override

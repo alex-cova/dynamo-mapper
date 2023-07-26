@@ -4,8 +4,23 @@ import org.jetbrains.annotations.Nullable;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 
 public class NumberConverter extends StringConverter {
+
+    protected AttributeValue writeBigInt(@Nullable BigInteger value) {
+        if (value == null) return null;
+
+        return AttributeValue.fromN(value.toString());
+    }
+
+    protected BigInteger readBigInt(@Nullable AttributeValue value) {
+        if (value == null || Boolean.TRUE.equals(value.nul())) return null;
+
+        if (value.n() == null) return null;
+
+        return new BigInteger(value.n());
+    }
 
     protected AttributeValue writeInt(int value) {
         return AttributeValue.fromN(String.valueOf(value));

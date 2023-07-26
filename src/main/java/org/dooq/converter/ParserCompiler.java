@@ -1,7 +1,9 @@
 package org.dooq.converter;
 
-import org.dooq.converter.converters.*;
-import org.jetbrains.annotations.*;
+import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.Contract;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
@@ -12,12 +14,7 @@ import java.beans.Transient;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.lang.reflect.*;
-import java.math.BigDecimal;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
@@ -32,13 +29,13 @@ import static org.objectweb.asm.Opcodes.*;
 @ApiStatus.Experimental
 class ParserCompiler extends ClassLoader {
 
-    public static boolean DEBUG = System.getProperty("dooq.converter.debug", "false")
-            .equalsIgnoreCase("true");
+    public static boolean DEBUG = System.getProperty("dooq.converter.debug", "false").equalsIgnoreCase("true");
 
     private static final ParserCompiler INSTANCE = new ParserCompiler();
-    private final Map<Class<?>, ObjectParser<?>> CACHE = new ConcurrentHashMap<>();
+    private final Map<Class<?>, ConverterStruct> converterMap = new HashMap<>();
 
     private ParserCompiler() {
+        converterMap.put(ObjectParser.class, new ConverterStruct(ObjectParser.class));
     }
 
     private Class<?> defineNewClass(byte[] bytecode, String name) {
@@ -60,10 +57,22 @@ class ParserCompiler extends ClassLoader {
         return super.defineClass("org.dooq.converter." + name, bytecode, 0, bytecode.length);
     }
 
-    @SuppressWarnings("unchecked")
     public static <T> @NotNull ObjectParser<T> getConverter(@NotNull Class<T> type) {
+        return getConverter(type, ObjectParser.class);
+    }
 
-        var parser = INSTANCE.CACHE.get(type);
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public static <T> @NotNull ObjectParser<T> getConverter(@NotNull Class<T> type, Class<? extends ObjectParser> parserClass) {
+
+        @Nullable var converter = INSTANCE.converterMap.get(parserClass);
+
+        if (converter == null) {
+            converter = new ConverterStruct(parserClass);
+            INSTANCE.converterMap.put(parserClass, converter);
+        }
+
+        var parser = converter
+                .getCachedParser(type);
 
         if (parser != null) {
             return (ObjectParser<T>) parser;
@@ -91,21 +100,22 @@ class ParserCompiler extends ClassLoader {
 
         ClassWriter writer = new ClassWriter(0);
 
-        writer.visit(V17, ACC_PUBLIC, getParentName(type),
-                null, Type.getInternalName(ObjectParser.class), null);
+        writer.visit(V17, ACC_PUBLIC, getParentName(type, parserClass),
+                null, Type.getInternalName(parserClass), null);
 
         defineNewInstance(writer, type);
-        defineConstructor(writer);
-        defineReadMethod(writer, type);
-        defineWriteMethod(writer, type);
+        defineConstructor(writer, parserClass);
+        defineReadMethod(writer, type, parserClass);
+        defineWriteMethod(writer, type, parserClass);
 
         writer.visitEnd();
 
         byte[] bytecode = writer.toByteArray();
 
-        var parserInstance = createObject(bytecode, type);
+        var parserInstance = createObject(bytecode, type, parserClass);
 
-        INSTANCE.CACHE.put(type, parserInstance);
+        INSTANCE.converterMap.get(parserClass)
+                .putCachedParser(type, parserInstance);
 
         return parserInstance;
     }
@@ -139,7 +149,8 @@ class ParserCompiler extends ClassLoader {
 
     }
 
-    private static void defineWriteMethod(@NotNull ClassWriter writer, @NotNull Class<?> type) {
+    @SuppressWarnings("rawtypes")
+    private static void defineWriteMethod(@NotNull ClassWriter writer, @NotNull Class<?> type, Class<? extends ObjectParser> parserClass) {
 
         var signature = "(L" + Type.getInternalName(type) + ";)Ljava/util/Map<Ljava/lang/String;L" + Type.getInternalName(AttributeValue.class) + ";>;";
 
@@ -157,7 +168,7 @@ class ParserCompiler extends ClassLoader {
                 "<init>", Type.getMethodDescriptor(Type.VOID_TYPE), false);
         visitor.visitVarInsn(ASTORE, 2);
 
-        var stacks = generateWriteMethods(visitor, type);
+        var stacks = generateWriteMethods(visitor, type, parserClass);
 
         visitor.visitMaxs(stacks + 1, 3);
 
@@ -175,7 +186,7 @@ class ParserCompiler extends ClassLoader {
         visitor.visitVarInsn(ALOAD, 0);
         visitor.visitVarInsn(ALOAD, 1);
         visitor.visitTypeInsn(CHECKCAST, Type.getInternalName(type));
-        visitor.visitMethodInsn(INVOKEVIRTUAL, getParentName(type), "write", descriptor, false);
+        visitor.visitMethodInsn(INVOKEVIRTUAL, getParentName(type, parserClass), "write", descriptor, false);
 
         visitor.visitInsn(ARETURN);
         visitor.visitMaxs(2, 2);
@@ -183,12 +194,13 @@ class ParserCompiler extends ClassLoader {
     }
 
     @Contract(pure = true)
-    private static <T> @NotNull String getParentName(@NotNull Class<T> type) {
-        return "org/dooq/converter/" + type.getSimpleName() + "Parser";
+    private static <T> @NotNull String getParentName(@NotNull Class<T> type, Class<?> parserClass) {
+        return "org/dooq/converter/" + type.getSimpleName() + parserClass.getSimpleName();
     }
 
 
-    private static int generateWriteMethods(MethodVisitor visitor, @NotNull Class<?> type) {
+    @SuppressWarnings("rawtypes")
+    private static int generateWriteMethods(MethodVisitor visitor, @NotNull Class<?> type, Class<? extends ObjectParser> parserClass) {
 
         Map<String, Method> methodMap = new HashMap<>();
 
@@ -230,7 +242,7 @@ class ParserCompiler extends ClassLoader {
 
             stacks += 2;
 
-            computeWriter(visitor, field.getName(), field.getType(), getMethod, type, getGenericType(field));
+            computeWriter(visitor, field.getName(), field.getType(), getMethod, type, getGenericType(field), parserClass);
         }
 
         return stacks;
@@ -286,88 +298,17 @@ class ParserCompiler extends ClassLoader {
      * @param parentType The parent type
      * @param parameters The generic parameters
      */
+    @SuppressWarnings("rawtypes")
     private static void computeWriter(MethodVisitor visitor, String name,
                                       @NotNull Class<?> valueType, @Nullable Method setMethod,
-                                      Class<?> parentType, Parameters parameters) {
+                                      Class<?> parentType, Parameters parameters,
+                                      Class<? extends ObjectParser> parserClass) {
 
-        if (valueType == String.class) {
-            handleWriterMethod(visitor, name, setMethod, "writeString");
-            return;
-        }
 
-        if (valueType.isPrimitive()) {
+        @Nullable var method = getWriterMethod(valueType, parserClass);
 
-            if (valueType == int.class) {
-                handleWriterMethod(visitor, name, setMethod, "writeInt");
-                return;
-            }
-
-            if (valueType == long.class) {
-                handleWriterMethod(visitor, name, setMethod, "writeLong");
-                return;
-            }
-
-            if (valueType == float.class) {
-                handleWriterMethod(visitor, name, setMethod, "writeFloat");
-                return;
-            }
-
-            if (valueType == boolean.class) {
-                handleWriterMethod(visitor, name, setMethod, "writeBool");
-                return;
-            }
-
-            if (valueType == short.class) {
-                handleWriterMethod(visitor, name, setMethod, "writeShort");
-                return;
-            }
-
-            Logger.getLogger(ParserCompiler.class.getName())
-                    .log(Level.WARNING, "Not implemented: " + valueType + " in class " + parentType);
-
-            return;
-        }
-
-        if (valueType.getSuperclass() == Number.class) {
-
-            if (valueType == Integer.class) {
-                handleWriterMethod(visitor, name, setMethod, "writeInteger");
-                return;
-            }
-
-            if (valueType == Short.class) {
-                handleWriterMethod(visitor, name, setMethod, "writeShorter");
-                return;
-            }
-
-            if (valueType == Long.class) {
-                handleWriterMethod(visitor, name, setMethod, "writeLonger");
-                return;
-            }
-
-            if (valueType == Float.class) {
-                handleWriterMethod(visitor, name, setMethod, "writeFloater");
-                return;
-            }
-
-            if (valueType == BigDecimal.class) {
-                handleWriterMethod(visitor, name, setMethod, "writeBigDecimal");
-                return;
-            }
-
-            Logger.getLogger(ParserCompiler.class.getName())
-                    .log(Level.WARNING, "Not implemented: " + valueType + " in class " + parentType);
-
-            return;
-        }
-
-        if (valueType == Boolean.class) {
-            handleWriterMethod(visitor, name, setMethod, "writeBoolean");
-            return;
-        }
-
-        if (valueType == UUID.class) {
-            handleWriterMethod(visitor, name, setMethod, "writeUUID");
+        if (method != null) {
+            handleWriterMethod(visitor, name, setMethod, method, parserClass);
             return;
         }
 
@@ -375,58 +316,108 @@ class ParserCompiler extends ClassLoader {
         if (valueType == List.class) {
 
             if (parameters.param1 == String.class) {
-                handleWriterMethod(visitor, name, setMethod, "writeStringList");
+                handleWriterMethod(visitor, name, setMethod, getMethodByName("writeStringList", parserClass), parserClass);
                 return;
             }
 
-            handleGenericWriteMethod(visitor, name, setMethod, "writeList", parameters.param1);
+            handleGenericWriteMethod(visitor, name, setMethod, "writeList", parameters.param1, parserClass);
             return;
 
         }
         if (valueType == Set.class) {
 
             if (parameters.param1 == String.class) {
-                handleWriterMethod(visitor, name, setMethod, "writeStringSet");
+                handleWriterMethod(visitor, name, setMethod, getMethodByName("writeStringSet", parserClass), parserClass);
                 return;
             }
 
-            handleGenericWriteMethod(visitor, name, setMethod, "writeSet", parameters.param1);
+            handleGenericWriteMethod(visitor, name, setMethod, "writeSet", parameters.param1, parserClass);
             return;
         }
 
 
         if (valueType == Map.class) {
-            handleGenericWriteMethod(visitor, name, setMethod, "writeMap", parameters.param2);
-            return;
-        }
-
-        if (valueType == LocalDateTime.class) {
-            handleWriterMethod(visitor, name, setMethod, "writeLocalDateTime");
-            return;
-        }
-
-        if (valueType == LocalDate.class) {
-            handleWriterMethod(visitor, name, setMethod, "writeLocalDate");
-            return;
-        }
-
-        if (valueType == LocalTime.class) {
-            handleWriterMethod(visitor, name, setMethod, "writeLocalTime");
+            handleGenericWriteMethod(visitor, name, setMethod, "writeMap", parameters.param2, parserClass);
             return;
         }
 
         if (isCustomClass(valueType)) {
-            handleGenericWriteMethod(visitor, name, setMethod, "writeComplex", valueType);
+            handleGenericWriteMethod(visitor, name, setMethod, "writeComplex", valueType, parserClass);
             return;
         }
 
+        if (isJVMClass(valueType)) {
+            throw new RuntimeException("Not implemented: " + valueType + " in class " + parentType);
+        }
 
         Logger.getLogger(ParserCompiler.class.getName())
                 .log(Level.WARNING, "Not implemented: " + valueType + " in class " + parentType);
 
     }
 
-    private static void handleWriterMethod(@NotNull MethodVisitor visitor, String name, @Nullable Method setMethod, String parser) {
+    @SuppressWarnings("rawtypes")
+    private static void computeReader(MethodVisitor visitor, String name,
+                                      @NotNull Class<?> valueType, @Nullable Method setMethod,
+                                      Class<?> parentType, Parameters parameters,
+                                      Class<? extends ObjectParser> parserClass) {
+
+
+        @Nullable var method = getReaderMethod(valueType, parserClass);
+
+        if (method != null) {
+            handleMethod(visitor, name, setMethod, method, parentType, parserClass);
+            return;
+        }
+
+        if (valueType == List.class) {
+
+            if (parameters.param1 == String.class) {
+                handleMethod(visitor, name, setMethod, getMethodByName("parseStringList", parserClass), parentType, parserClass);
+                return;
+            }
+
+            handleGenericSetMethod(visitor, name, setMethod, "parseList", parameters.param1, parentType, parserClass);
+            return;
+
+        }
+        if (valueType == Set.class) {
+
+            if (parameters.param1 == String.class) {
+                handleMethod(visitor, name, setMethod, getMethodByName("parseStringSet", parserClass), parentType, parserClass);
+                return;
+            }
+
+            handleGenericSetMethod(visitor, name, setMethod, "parseSet", parameters.param1, parentType, parserClass);
+            return;
+        }
+
+
+        if (valueType == Map.class) {
+            handleGenericSetMethod(visitor, name, setMethod, "parseMap", parameters.param2, parentType, parserClass);
+            return;
+        }
+
+
+        if (isCustomClass(valueType)) {
+            handleComplex(visitor, name, setMethod, valueType, parentType, parserClass);
+            return;
+        }
+
+        if (isJVMClass(valueType)) {
+            throw new RuntimeException("Not implemented: " + valueType + " in class " + parentType);
+        }
+
+        Logger.getLogger(ParserCompiler.class.getName())
+                .log(Level.WARNING, "Not implemented: " + valueType + " in class " + parentType);
+    }
+
+    private static @NotNull Method getMethodByName(String name, Class<?> parserClass) {
+        return INSTANCE.converterMap.get(parserClass).getMethod(name);
+    }
+
+    @SuppressWarnings("rawtypes")
+    private static void handleWriterMethod(@NotNull MethodVisitor visitor, String name,
+                                           @Nullable Method setMethod, @NotNull Method parser, @NotNull Class<? extends ObjectParser> parserClass) {
 
         Objects.requireNonNull(setMethod, "No setter found for field: " + name);
 
@@ -436,7 +427,7 @@ class ParserCompiler extends ClassLoader {
         visitor.visitVarInsn(ALOAD, 1);
 
         visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(setMethod.getDeclaringClass()), setMethod.getName(), Type.getMethodDescriptor(setMethod), false);
-        visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(ObjectParser.class), parser, Type.getMethodDescriptor(getParserMethod(parser)), false);
+        visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(parserClass), parser.getName(), Type.getMethodDescriptor(parser), false);
 
         visitor.visitMethodInsn(INVOKEINTERFACE, "java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", true);
 
@@ -444,8 +435,9 @@ class ParserCompiler extends ClassLoader {
 
     }
 
+    @SuppressWarnings("rawtypes")
     private static void handleGenericWriteMethod(@NotNull MethodVisitor visitor, String name, @Nullable Method setMethod,
-                                                 String parser, Class<?> type) {
+                                                 String parser, Class<?> type, Class<? extends ObjectParser> parserClass) {
 
         Objects.requireNonNull(setMethod, "No setter found for field: " + name);
 
@@ -458,13 +450,15 @@ class ParserCompiler extends ClassLoader {
 
         visitor.visitLdcInsn(Type.getType(type));
 
-        visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(ObjectParser.class), parser, Type.getMethodDescriptor(getParserMethod(parser)), false);
+        visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(ObjectParser.class), parser, Type.getMethodDescriptor(getMethodByName(parser, parserClass)), false);
         visitor.visitMethodInsn(INVOKEINTERFACE, "java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", true);
 
         visitor.visitInsn(POP);
     }
 
-    private static void handleMethod(@NotNull MethodVisitor visitor, String name, @Nullable Method setMethod, String parser, @NotNull Class<?> parent) {
+    @SuppressWarnings("rawtypes")
+    private static void handleMethod(@NotNull MethodVisitor visitor, String name, @Nullable Method setMethod,
+                                     Method parser, @NotNull Class<?> parent, Class<? extends ObjectParser> parserClass) {
 
         if (parent.isRecord()) {
 
@@ -474,8 +468,8 @@ class ParserCompiler extends ClassLoader {
 
             visitor.visitMethodInsn(INVOKEINTERFACE, "java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;", true);
             visitor.visitTypeInsn(CHECKCAST, Type.getInternalName(AttributeValue.class));
-            visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(ObjectParser.class), parser,
-                    Type.getMethodDescriptor(getParserMethod(parser)), false);
+            visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(parserClass), parser.getName(),
+                    Type.getMethodDescriptor(parser), false);
 
             return;
         }
@@ -490,8 +484,8 @@ class ParserCompiler extends ClassLoader {
 
         visitor.visitMethodInsn(INVOKEINTERFACE, "java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;", true);
         visitor.visitTypeInsn(CHECKCAST, Type.getInternalName(AttributeValue.class));
-        visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(ObjectParser.class), parser,
-                Type.getMethodDescriptor(getParserMethod(parser)), false);
+        visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(parserClass), parser.getName(),
+                Type.getMethodDescriptor(parser), false);
 
         visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(setMethod.getDeclaringClass()),
                 setMethod.getName(), Type.getMethodDescriptor(setMethod), false);
@@ -502,10 +496,15 @@ class ParserCompiler extends ClassLoader {
 
     }
 
-
+    @SuppressWarnings("rawtypes")
     private static void handleGenericSetMethod(@NotNull MethodVisitor visitor, String name,
-                                               @Nullable Method setMethod, String parser, Class<?> type, @NotNull Class<?> parent) {
+                                               @Nullable Method setMethod, String parser,
+                                               Class<?> type, @NotNull Class<?> parent,
+                                               Class<? extends ObjectParser> parserClass) {
 
+        @Nullable var readerMethod = getMethodByName(parser, parserClass);
+
+        Objects.requireNonNull(readerMethod, "No method found with name: " + parser);
 
         if (parent.isRecord()) {
 
@@ -518,13 +517,13 @@ class ParserCompiler extends ClassLoader {
 
             visitor.visitLdcInsn(Type.getType(type));
 
-            visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(ObjectParser.class), parser,
-                    Type.getMethodDescriptor(getParserMethod(parser)), false);
+            visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(parserClass), parser,
+                    Type.getMethodDescriptor(readerMethod), false);
 
             return;
         }
 
-        Objects.requireNonNull(setMethod);
+        Objects.requireNonNull(setMethod, "No setter found for field: " + name);
 
         visitor.visitVarInsn(ALOAD, 2);
         visitor.visitVarInsn(ALOAD, 0);
@@ -537,8 +536,8 @@ class ParserCompiler extends ClassLoader {
 
         visitor.visitLdcInsn(Type.getType(type));
 
-        visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(ObjectParser.class), parser,
-                Type.getMethodDescriptor(getParserMethod(parser)), false);
+        visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(parserClass), parser,
+                Type.getMethodDescriptor(readerMethod), false);
 
         visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(setMethod.getDeclaringClass()),
                 setMethod.getName(), Type.getMethodDescriptor(setMethod), false);
@@ -548,7 +547,13 @@ class ParserCompiler extends ClassLoader {
         }
     }
 
-    private static void handleComplex(@NotNull MethodVisitor visitor, String name, @Nullable Method setMethod, Class<?> type, @NotNull Class<?> parent) {
+    @SuppressWarnings("rawtypes")
+    private static void handleComplex(@NotNull MethodVisitor visitor, String name, @Nullable Method setMethod,
+                                      Class<?> type, @NotNull Class<?> parent, Class<? extends ObjectParser> parserClass) {
+
+        @Nullable var readerMethod = getMethodByName("parseComplex", parserClass);
+
+        Objects.requireNonNull(readerMethod, "No method found with name: parseComplex");
 
         if (parent.isRecord()) {
 
@@ -562,8 +567,8 @@ class ParserCompiler extends ClassLoader {
 
             visitor.visitLdcInsn(Type.getType(type));
 
-            visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(ObjectParser.class), "parseComplex",
-                    Type.getMethodDescriptor(getParserMethod("parseComplex")), false);
+            visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(parserClass), "parseComplex",
+                    Type.getMethodDescriptor(readerMethod), false);
 
             visitor.visitTypeInsn(CHECKCAST, Type.getInternalName(type));
 
@@ -583,8 +588,8 @@ class ParserCompiler extends ClassLoader {
 
         visitor.visitLdcInsn(Type.getType(type));
 
-        visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(ObjectParser.class), "parseComplex",
-                Type.getMethodDescriptor(getParserMethod("parseComplex")), false);
+        visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(parserClass), "parseComplex",
+                Type.getMethodDescriptor(readerMethod), false);
 
         visitor.visitTypeInsn(CHECKCAST, Type.getInternalName(type));
         visitor.visitMethodInsn(INVOKEVIRTUAL, Type.getInternalName(setMethod.getDeclaringClass()),
@@ -597,10 +602,12 @@ class ParserCompiler extends ClassLoader {
 
     }
 
-    private static void defineReadMethod(@NotNull ClassWriter writer, @NotNull Class<?> type) {
+    @SuppressWarnings("rawtypes")
+    private static void defineReadMethod(@NotNull ClassWriter writer, @NotNull Class<?> type,
+                                         Class<? extends ObjectParser> parserClass) {
 
         if (type.isRecord()) {
-            defineRecordParser(writer, type);
+            defineRecordParser(writer, type, parserClass);
             return;
         }
 
@@ -615,7 +622,7 @@ class ParserCompiler extends ClassLoader {
                 "<init>", Type.getMethodDescriptor(Type.VOID_TYPE), false);
         visitor.visitVarInsn(ASTORE, 2);
 
-        var stacks = generateMethods(visitor, type);
+        var stacks = generateMethods(visitor, type, parserClass);
 
         visitor.visitMaxs(stacks + 1, 3);
 
@@ -625,7 +632,8 @@ class ParserCompiler extends ClassLoader {
 
     }
 
-    private static void defineRecordParser(@NotNull ClassWriter writer, Class<?> type) {
+    @SuppressWarnings("rawtypes")
+    private static void defineRecordParser(@NotNull ClassWriter writer, Class<?> type, Class<? extends ObjectParser> parserClass) {
         // Define the parse method
         MethodVisitor visitor = writer.visitMethod(Opcodes.ACC_PUBLIC, "read", "(Ljava/util/Map;)Ljava/lang/Object;",
                 "(Ljava/util/Map<Ljava/lang/String;LAttributeValue;>;)L" + Type.getInternalName(type) + ";", null);
@@ -634,7 +642,7 @@ class ParserCompiler extends ClassLoader {
         visitor.visitTypeInsn(NEW, Type.getInternalName(type));
         visitor.visitInsn(DUP);
 
-        var stacks = generateMethods(visitor, type);
+        var stacks = generateMethods(visitor, type, parserClass);
 
         StringBuilder stringBuilder = new StringBuilder();
         stringBuilder.append('(');
@@ -652,10 +660,11 @@ class ParserCompiler extends ClassLoader {
         visitor.visitEnd();
     }
 
-    private static void defineConstructor(@NotNull ClassWriter writer) {
+    @SuppressWarnings("rawtypes")
+    private static void defineConstructor(@NotNull ClassWriter writer, Class<? extends ObjectParser> parserClass) {
         MethodVisitor constructorMv = writer.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
         constructorMv.visitVarInsn(Opcodes.ALOAD, 0);
-        constructorMv.visitMethodInsn(Opcodes.INVOKESPECIAL, Type.getInternalName(ObjectParser.class), "<init>", "()V", false); // Call the superclass constructor
+        constructorMv.visitMethodInsn(Opcodes.INVOKESPECIAL, Type.getInternalName(parserClass), "<init>", "()V", false); // Call the superclass constructor
         constructorMv.visitInsn(Opcodes.RETURN);
         constructorMv.visitMaxs(1, 1);
         constructorMv.visitEnd();
@@ -676,7 +685,8 @@ class ParserCompiler extends ClassLoader {
                 .toList();
     }
 
-    private static int generateMethods(MethodVisitor visitor, @NotNull Class<?> type) {
+    @SuppressWarnings("rawtypes")
+    private static int generateMethods(MethodVisitor visitor, @NotNull Class<?> type, Class<? extends ObjectParser> parserClass) {
 
         var methodMap = Arrays.stream(type.getDeclaredMethods())
                 .filter(a -> a.getParameterCount() == 1)
@@ -690,7 +700,8 @@ class ParserCompiler extends ClassLoader {
         if (type.isRecord()) {
 
             for (RecordComponent component : type.getRecordComponents()) {
-                compute(visitor, component.getName(), component.getType(), null, type, getGenericType(component.getGenericType()));
+                computeReader(visitor, component.getName(), component.getType(), null,
+                        type, getGenericType(component.getGenericType()), parserClass);
 
 
                 stacks += 2;
@@ -714,7 +725,7 @@ class ParserCompiler extends ClassLoader {
 
                 stacks += 2;
 
-                compute(visitor, field.getName(), field.getType(), setMethod, type, getGenericType(field));
+                computeReader(visitor, field.getName(), field.getType(), setMethod, type, getGenericType(field), parserClass);
             }
         }
 
@@ -722,158 +733,46 @@ class ParserCompiler extends ClassLoader {
     }
 
 
-    private static void compute(MethodVisitor visitor, String name,
-                                @NotNull Class<?> valueType, @Nullable Method setMethod,
-                                Class<?> parentType, Parameters parameters) {
-
-        if (valueType.isPrimitive()) {
-
-            if (valueType == int.class) {
-                handleMethod(visitor, name, setMethod, "parseInt", parentType);
-                return;
-            }
-
-            if (valueType == long.class) {
-                handleMethod(visitor, name, setMethod, "parseLong", parentType);
-                return;
-            }
-
-            if (valueType == float.class) {
-                handleMethod(visitor, name, setMethod, "parseFloat", parentType);
-                return;
-            }
-
-            if (valueType == boolean.class) {
-                handleMethod(visitor, name, setMethod, "parseBool", parentType);
-                return;
-            }
-
-            return;
-        }
-
-        if (valueType == String.class) {
-            handleMethod(visitor, name, setMethod, "parseString", parentType);
-            return;
-        }
-
-
-        if (valueType == Integer.class) {
-            handleMethod(visitor, name, setMethod, "parseInteger", parentType);
-            return;
-        }
-
-
-        if (valueType == Long.class) {
-            handleMethod(visitor, name, setMethod, "parseLonger", parentType);
-            return;
-        }
-
-
-        if (valueType == Float.class) {
-            handleMethod(visitor, name, setMethod, "parseFloater", parentType);
-            return;
-        }
-
-
-        if (valueType == Boolean.class) {
-            handleMethod(visitor, name, setMethod, "parseBoolean", parentType);
-            return;
-        }
-
-        if (valueType == UUID.class) {
-            handleMethod(visitor, name, setMethod, "parseUUID", parentType);
-            return;
-        }
-
-        if (valueType == BigDecimal.class) {
-            handleMethod(visitor, name, setMethod, "parseBigDecimal", parentType);
-            return;
-        }
-
-        if (valueType == List.class) {
-
-            if (parameters.param1 == String.class) {
-                handleMethod(visitor, name, setMethod, "parseStringList", parentType);
-                return;
-            }
-
-            handleGenericSetMethod(visitor, name, setMethod, "parseList", parameters.param1, parentType);
-            return;
-
-        }
-        if (valueType == Set.class) {
-
-            if (parameters.param1 == String.class) {
-                handleMethod(visitor, name, setMethod, "parseStringSet", parentType);
-                return;
-            }
-
-            handleGenericSetMethod(visitor, name, setMethod, "parseSet", parameters.param1, parentType);
-            return;
-        }
-
-
-        if (valueType == Map.class) {
-            handleGenericSetMethod(visitor, name, setMethod, "parseMap", parameters.param2, parentType);
-            return;
-        }
-
-        if (valueType == LocalDateTime.class) {
-            handleMethod(visitor, name, setMethod, "parseLocalDateTime", parentType);
-            return;
-        }
-
-        if (valueType == LocalDate.class) {
-            handleMethod(visitor, name, setMethod, "parseLocalDate", parentType);
-            return;
-        }
-
-        if (valueType == LocalTime.class) {
-            handleMethod(visitor, name, setMethod, "parseLocalTime", parentType);
-            return;
-        }
-
-        if (isCustomClass(valueType)) {
-            handleComplex(visitor, name, setMethod, valueType, parentType);
-            return;
-        }
-
-        Logger.getLogger(ParserCompiler.class.getName())
-                .log(Level.WARNING, "Not implemented: " + valueType + " in class " + parentType);
-    }
-
     static boolean isCustomClass(@NotNull Class<?> type) {
         return !type.getName().startsWith("java");
     }
 
-    static Map<String, Method> parserMethodMap = new HashMap<>();
-
-    private static Method getParserMethod(String name) {
-
-        if (parserMethodMap.isEmpty()) {
-
-            var converters = List.of(CollectionConverter.class,
-                    AdditionalConverter.class,
-                    BooleanConverter.class,
-                    DateConverter.class,
-                    NumberConverter.class,
-                    ObjectParser.class,
-                    StringConverter.class);
-
-            for (Class<? extends AdditionalConverter> converter : converters) {
-                for (Method declaredMethod : converter.getDeclaredMethods()) {
-                    parserMethodMap.put(declaredMethod.getName(), declaredMethod);
-                }
-            }
-        }
-
-        return Objects.requireNonNull(parserMethodMap.get(name), "Missing parse method: " + name);
+    static boolean isJVMClass(@NotNull Class<?> type) {
+        return type.getName().startsWith("java");
     }
 
 
+    private static @Nullable Method getReaderMethod(Class<?> type, Class<?> parserClass) {
+
+        if (type == List.class) return null;
+        if (type == Map.class) return null;
+        if (type == Set.class) return null;
+
+        var converter = INSTANCE.converterMap.get(parserClass);
+
+        if (converter == null) {
+            converter = new ConverterStruct(parserClass);
+            INSTANCE.converterMap.put(parserClass, converter);
+        }
+
+        return converter.getReader(type);
+    }
+
+    public static @Nullable Method getWriterMethod(Class<?> type, Class<?> parserClass) {
+
+        var converter = INSTANCE.converterMap.get(parserClass);
+
+        if (converter == null) {
+            converter = new ConverterStruct(parserClass);
+            INSTANCE.converterMap.put(parserClass, converter);
+        }
+
+        return converter.getWriter(type);
+    }
+
     @SuppressWarnings("unchecked")
-    private static <T> @NotNull ObjectParser<T> createObject(byte[] bytecode, @NotNull Class<T> type) {
-        var clazz = INSTANCE.defineNewClass(bytecode, type.getSimpleName() + "Parser");
+    private static <T> @NotNull ObjectParser<T> createObject(byte[] bytecode, @NotNull Class<T> type, @NotNull Class<?> parserClass) {
+        var clazz = INSTANCE.defineNewClass(bytecode, type.getSimpleName() + parserClass.getSimpleName());
 
         try {
             var constructor = clazz.getConstructor();

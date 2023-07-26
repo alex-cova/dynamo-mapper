@@ -1,10 +1,10 @@
 # dynamo-mapper
 
-Generates converter classes for POJOs at compile time, using ASM.
+Generates converter classes (Java 17) for POJOs at runtime, using ASM.
 
 ## Features
 
-* Fast
+* Fast ⚡️
 * Easy to use
 * No reflection used at conversion time
 * Little memory footprint
@@ -24,25 +24,69 @@ ConverterBenchmark.writeBenchmark  avgt    5  1071.437 ± 4.250  ns/op
 * Target class must have a default constructor
 * Target class must have getters and setters for all fields to parse
 
-if you want to omit some fields, you can use `@DynamoIgnore` annotation or `transient` keyword on field
+if you want to omit some fields, you can use `@DynamoIgnore` annotation or `transient` keyword on field,
+**this doesn't apply to records.**
 
-Usage:
+## Usage:
 
 ```java
 public Map<String, AttributeValue> writeToMap(Pojo pojo){
-    return DynamoConverter.getConverter(Pojo.class).write(pojo);
-}
+        return DynamoConverter.getConverter(Pojo.class).write(pojo);
+        }
 ```
 
 ```java
 public Pojo readFromMap(Map<String, AttributeValue> map){
-    return DynamoConverter.getConverter(Pojo.class).read(map);
+        return DynamoConverter.getConverter(Pojo.class).read(map);
+        }
+```
+
+---
+
+## Implementing custom converters
+
+You can implement custom converters by creating an abstract class that extends `ObjectParser`
+
+```java
+public abstract class CustomObjectConverter<T> extends ObjectParser<T> {
+
+    @Override
+    protected AttributeValue writeString(String value) {
+        return AttributeValue.fromS("custom");
+    }
+
+    protected AttributeValue writeCustom(Custom custom) {
+        return AttributeValue.fromS(custom.getCustomValue());
+    }
+
+    protected Custom readCustom(AttributeValue value) {
+        return new Custom(value.s());
+    }
 }
 ```
+
+**Requirements:**
+
+- Class must be abstract
+- Class must have a default constructor
+- Read and Write methods must exist, have only one parameter and must be `protected`
+- Name of the converter must be unique, and not named `ObjectParser` because the generated class is named `'TargetName' + 'ConverterName'`
+
+```java
+public Map<String, AttributeValue> writeToMap(Pojo pojo){
+        return DynamoConverter.getConverter(Pojo.class,CustomObjectConverter.class)
+        .write(pojo);
+        }
+```
+
+---
+
+## How this works
 
 Target class:
 
 ```java
+
 public class Pojo {
     private String name;
     private int age;

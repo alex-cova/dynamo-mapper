@@ -1,19 +1,13 @@
 package org.dooq.tests;
 
-import org.dooq.converter.Converter;
 import org.dooq.converter.DynamoConverter;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
-import org.openjdk.jmh.annotations.Benchmark;
-import org.openjdk.jmh.annotations.BenchmarkMode;
-import org.openjdk.jmh.annotations.Mode;
-import org.openjdk.jmh.annotations.OutputTimeUnit;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 public class ConverterTests {
 
@@ -58,7 +52,28 @@ public class ConverterTests {
         Assertions.assertEquals(recordExample, resultRecord);
     }
 
+    @Test
+    void testCustomConverter() {
+        var converter = DynamoConverter.getConverter(Pojo.class, CustomObjectConverter.class);
 
+
+        var pojo = new Pojo()
+                .setAge(33)
+                .setName("Alex")
+                .setFlags(List.of(true))
+                .setSex(true)
+                .setHobbies(List.of("football", "basketball"))
+                .setScores(List.of(1, 2, 3))
+                .setMap(Map.of("key", new java.math.BigDecimal("1.2")));
+
+        var map = converter.write(pojo);
+
+        System.out.println(map);
+
+        var result = converter.read(map);
+
+        Assertions.assertEquals(result.getName(), "custom");
+    }
 
 
 }
