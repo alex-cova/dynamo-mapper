@@ -35,6 +35,8 @@ class ParserCompiler extends ClassLoader {
     private final Map<Class<?>, ConverterStruct> converterMap = new HashMap<>();
 
     private ParserCompiler() {
+        super("ParserCompiler", Thread.currentThread().getContextClassLoader());
+
         converterMap.put(ObjectParser.class, new ConverterStruct(ObjectParser.class));
     }
 
@@ -50,7 +52,8 @@ class ParserCompiler extends ClassLoader {
                 outputStream.write(bytecode);
                 outputStream.close();
             } catch (Exception ex) {
-                ex.printStackTrace();
+                Logger.getLogger(ParserCompiler.class.getName())
+                        .log(Level.SEVERE, null, ex);
             }
         }
 
